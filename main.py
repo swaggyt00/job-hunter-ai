@@ -542,6 +542,10 @@ async def scheduled(ctx):
     except Exception: log.exception("Scheduled scan error (remember to press Start in Telegram)")
 
 async def init(app):
+    totals=db.execute("SELECT source,COUNT(*) total,SUM(CASE WHEN rejected=0 THEN 1 ELSE 0 END) accepted, MAX(score) maxscore FROM jobs GROUP BY source").fetchall()
+    log.info("Source diagnostics: %s",[(r["source"],r["total"],r["accepted"],r["maxscore"]) for r in totals])
+    sample=db.execute("SELECT source,title,score,rejected,warnings FROM jobs WHERE source IN ('Хабр Карьера','Работа России','GeekJob') ORDER BY score DESC LIMIT 12").fetchall()
+    log.info("RU score samples: %s",[(r["source"],r["title"][:55],r["score"],r["rejected"],r["warnings"][:100]) for r in sample])
     app.job_queue.run_repeating(scheduled,interval=SCAN_HOURS*3600,first=55)
 
 def main():
