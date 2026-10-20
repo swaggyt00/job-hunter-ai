@@ -12,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 from html import unescape
 from pathlib import Path
 from urllib.parse import urlparse
+from enhancements import fetch_russian_sources, parse_date, published_within
 
 import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -26,7 +27,7 @@ DB_PATH = Path(os.getenv("DB_PATH", "/app/data/jobs.sqlite3"))
 MIN_SCORE = int(os.getenv("MIN_SCORE", "65"))
 NOTIFY_LIMIT = min(10, max(1, int(os.getenv("NOTIFY_LIMIT", "5"))))
 SCAN_HOURS = max(6, int(os.getenv("SCAN_HOURS", "12")))
-DAYS = min(30, max(1, int(os.getenv("MAX_AGE_DAYS", "14"))))
+DAYS = max(30, min(90, max(1, int(os.getenv("MAX_AGE_DAYS", "30")))))
 GITHUB_URL = os.getenv("GITHUB_URL", "")
 PORTFOLIO = os.getenv("GENERAL_PORTFOLIO_URL", "")
 LINKS = [(name, os.getenv(key, "")) for name, key in (
@@ -34,7 +35,7 @@ LINKS = [(name, os.getenv(key, "")) for name, key in (
     ("Production-видео", "PRODUCTION_PORTFOLIO_URL"),
     ("Рекламные AI Clips", "ADS_PORTFOLIO_URL"),
 )]
-ROLE = ("ai video", "ai creator", "ai content", "ai producer", "genai", "generative ai",
+ROLE = ("llm", "ai-инженер", "ai-разработчик", "ии-разработчик", "ии-продюсер", "ai-продюсер", "нейрокреатор", "нейродизайнер", "видеопродюсер", "креативный продюсер", "prompt engineer", "промпт-инженер", "ai video", "ai creator", "ai content", "ai producer", "genai", "generative ai",
         "ai artist", "creative technologist", "ai automation", "llm engineer", "ai engineer",
         "prompt engineer", "ai agent", "ai specialist", "нейрокреатор", "ии-креатор",
         "ai-виде", "ai-специалист", "llm-разработчик", "инженер llm", "генеративный")
@@ -80,22 +81,27 @@ def score_job(job):
         return 0, ["Другая специализация"], True, []
     if job.get("remote") is False or any(x in text for x in NO_OFFICE):
         return 0, ["Офисный или гибридный формат"], True, []
-    if not job.get("remote") and not any(x in text for x in REMOTE):
-        return 0, ["Удалёнка не подтверждена"], True, []
+    if job.get("remote") is None and not any(x in text for x in REMOTE):
+        warnings.append("Удалёнка не подтверждена: проверь формат")
     if any(x in text for x in NO_GIG):
         return 0, ["Разовый заказ или оплата только за единицу контента"], True, []
     if any(x in text for x in NO_GEO):
         return 0, ["Географическое ограничение"], True, []
     place = job.get("location", "").strip().casefold()
     if place and place not in ("anywhere", "worldwide", "global", "remote",
-                               "anywhere in the world", "russia", "ru", "russian federation"):
-        return 0, ["Страна найма требует проверки: " + place[:50]], True, []
+                               "anywhere in the world", "russia", "ru", "russian federation", "россия", "рф"):
+        warnings.append("Возможность найма из РФ требует проверки: " + place[:50])
     if any(x in text for x in ("native english required", "english c1 required", "native-level english", "английский c1")):
         return 0, ["Требуется английский C1/native"], True, []
     s = 24 + (30 if hit_role else 8) + min(30, hits * 5)
+    if job.get("remote") is None and not any(x in text for x in REMOTE): s -= 12
+    if place and place not in ("anywhere","worldwide","global","remote","russia","ru","russian federation","россия","рф"): s -= 10
+    if job["source"] == "Работа России":
+        amounts = [int(x.replace(" ","")) for x in re.findall(r"\d[\d ]{3,}",str(job.get("salary") or ""))]
+        if amounts and max(amounts) < 70000: return 0, ["Зарплата ниже 70 000 ₽"], True, []
     reasons.append("Релевантное AI-направление" if hit_role else "Совпадение инструментов")
     s += 12
-    reasons.append("Удалённая работа")
+    reasons.append("Удалёнка подтверждена" if job.get("remote") or any(x in text for x in REMOTE) else "Удалёнка требует проверки")
     if any(x in text for x in ("full-time", "full time", "полная занятость", "долгосрочн")):
         s += 7
         reasons.append("Долгосрочная занятость")
@@ -122,7 +128,7 @@ db.commit()
 lock = asyncio.Lock()
 last_scan = 0.0
 last_result = (0, 0, 0)
-source_status = {"Himalayas": "Ожидание", "Remotive": "Ожидание",
+source_status = {"Хабр Карьера": "Ожидание", "Работа России": "Ожидание", "getmatch": "Публичный каталог без списка вакансий; импорт /add", "Dream Job": "Нет открытого API; импорт /add", "Himalayas": "Ожидание", "Remotive": "Ожидание",
                  "HeadHunter": "Нет официального токена", "RSS": "Не подключены"}
 
 def flag(key, default=""):
@@ -140,7 +146,7 @@ def insert(job):
     key = hashlib.sha256(slug.encode()).hexdigest()
     old = db.execute("SELECT id,score FROM jobs WHERE dedupe=?", (key,)).fetchone()
     if old:
-        if s > old["score"]:
+        if s != old["score"]:
             db.execute("UPDATE jobs SET score=?, reasons=?, warnings=?, rejected=? WHERE id=?",
                        (s, json.dumps(reasons, ensure_ascii=False), json.dumps(warnings, ensure_ascii=False), int(rejected), old["id"]))
             db.commit()
@@ -240,6 +246,9 @@ async def gather_jobs():
             else:
                 source_status[name]=str(len(out))+" вакансий"
                 results.extend(j for j in out if j.get("title") and j.get("url"))
+        russian, statuses = await fetch_russian_sources(client, max_age=DAYS)
+        source_status.update(statuses)
+        results.extend(russian)
     return results
 
 async def scan_data():
