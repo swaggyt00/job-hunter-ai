@@ -53,5 +53,15 @@ class TestPublicationAndSources(unittest.TestCase):
         self.assertIn("100000",jobs[0]["salary"])
         self.assertEqual(jobs[0]["source"],"Работа России")
 
+
+    def test_index_distinguishes_index_date(self):
+        from index_sources import parse_index_rss
+        xml=b"<rss><channel><item><title>AI Creator</title><link>https://hh.ru/vacancy/1234</link><description>Remote AI</description><pubDate>Tue, 20 Oct 2026 12:00:00 GMT</pubDate></item></channel></rss>"
+        rows=parse_index_rss(xml,"HH индекс")
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]["published"],"")
+        self.assertIsNone(rows[0]["remote"])
+        self.assertEqual(parse_index_rss(xml,"Dream Job индекс"),[])
+
 if __name__=="__main__":
     unittest.main()
