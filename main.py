@@ -35,7 +35,7 @@ LINKS = [(name, os.getenv(key, "")) for name, key in (
     ("Production-видео", "PRODUCTION_PORTFOLIO_URL"),
     ("Рекламные AI Clips", "ADS_PORTFOLIO_URL"),
 )]
-ROLE = ("llm", "ai-инженер", "ai-разработчик", "ии-разработчик", "ии-продюсер", "ai-продюсер", "нейрокреатор", "нейродизайнер", "видеопродюсер", "креативный продюсер", "prompt engineer", "промпт-инженер", "ai video", "ai creator", "ai content", "ai producer", "genai", "generative ai",
+ROLE = ("creative producer", "video creator", "ai specialist", "prompt-инженер", "gen ai", "llm", "ai-инженер", "ai-разработчик", "ии-разработчик", "ии-продюсер", "ai-продюсер", "нейрокреатор", "нейродизайнер", "видеопродюсер", "креативный продюсер", "prompt engineer", "промпт-инженер", "ai video", "ai creator", "ai content", "ai producer", "genai", "generative ai",
         "ai artist", "creative technologist", "ai automation", "llm engineer", "ai engineer",
         "prompt engineer", "ai agent", "ai specialist", "нейрокреатор", "ии-креатор",
         "ai-виде", "ai-специалист", "llm-разработчик", "инженер llm", "генеративный")
@@ -77,7 +77,7 @@ def score_job(job):
     hit_role = any(x in title for x in ROLE)
     hits = sum(x in text for x in SKILLS)
     warnings, reasons = [], []
-    if any(x in title for x in BAD_ROLES) or (not hit_role and hits < 3):
+    if (any(x in title for x in BAD_ROLES) and not hit_role) or (not hit_role and hits < 3):
         return 0, ["Другая специализация"], True, []
     if job.get("remote") is False or any(x in text for x in NO_OFFICE):
         return 0, ["Офисный или гибридный формат"], True, []
@@ -546,6 +546,7 @@ async def init(app):
     log.info("Source diagnostics: %s",[(r["source"],r["total"],r["accepted"],r["maxscore"]) for r in totals])
     sample=db.execute("SELECT source,title,score,rejected,warnings FROM jobs WHERE source IN ('Хабр Карьера','Работа России','GeekJob') ORDER BY score DESC LIMIT 12").fetchall()
     log.info("RU score samples: %s",[(r["source"],r["title"][:55],r["score"],r["rejected"],r["warnings"][:100]) for r in sample])
+    log.info("Eligible for selected period %s: %s",date_label(),len(matching_jobs(limit=2500)))
     app.job_queue.run_repeating(scheduled,interval=SCAN_HOURS*3600,first=55)
 
 def main():
