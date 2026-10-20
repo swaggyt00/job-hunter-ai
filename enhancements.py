@@ -71,6 +71,49 @@ def parse_trudvsem(doc):
             salary=str(salary),remote=remote,location="Россия"))
     return jobs
 
+
+
+def parse_geekjob_html(html):
+    """Parse public GeekJob vacancy cards, without login or hidden APIs."""
+    from bs4 import BeautifulSoup
+    from urllib.parse import urljoin
+    import re
+    soup=BeautifulSoup(html,"html.parser")
+    jobs={}
+    ru_months={"января":1,"февраля":2,"марта":3,"апреля":4,"мая":5,
+        "июня":6,"июля":7,"августа":8,"сентября":9,"октября":10,"ноября":11,"декабря":12}
+    for a in soup.select('a[href*="/vacancy/"]'):
+        url=urljoin("https://geekjob.ru",a.get("href","")).split("?")[0]
+        if not re.match(r"^https://geekjob\.ru/vacancy/[a-zA-Z0-9_-]+$",url): continue
+        li=a.find_parent("li") or a.find_parent("article") or a
+        phrases=[p.get_text(" ",strip=True) for p in li.find_all("p")]
+        phrases=[p.strip() for p in phrases if len(p.strip())>=5 and
+                 p.strip().lower() not in ("remote","office","parttime","relocate")]
+        if not phrases: continue
+        title=phrases[0][:180]
+        company=phrases[1][:120] if len(phrases)>1 else "Не указана"
+        raw=li.get_text(" ",strip=True)
+        lower=raw.casefold()
+        remote=("remote" in lower or "удалён" in lower or "удален" in lower)
+        pub=""
+        date_tag=li.find("time")
+        if date_tag:
+            label=date_tag.get("datetime") or date_tag.get_text(" ",strip=True)
+            stamp=parse_date(label)
+            if stamp: pub=stamp.isoformat()
+            else:
+                m=re.search(r"(\d{1,2})\s+(%s)" % "|".join(ru_months),label.casefold())
+                if m:
+                    try:
+                        dt=datetime(datetime.now(timezone.utc).year,ru_months[m.group(2)],int(m.group(1)),tzinfo=timezone.utc)
+                        if dt.date() > datetime.now(timezone.utc).date(): dt=dt.replace(year=dt.year-1)
+                        pub=dt.isoformat()
+                    except ValueError: pass
+        jobs[url]=dict(title=title,company=company,source="GeekJob",
+            url=url,description=raw[:7000],published=pub,salary="",
+            remote=remote,location="Россия")
+    return list(jobs.values())
+
 async def fetch_russian_sources(client, max_age=30):
     """Return (vacancies, source-status). Every source is isolated and observable."""
     statuses = {}
@@ -112,9 +155,25 @@ async def fetch_russian_sources(client, max_age=30):
         if not output and errors: raise RuntimeError("; ".join(errors[:2]))
         statuses["Работа России"] = f"{len(output)} свежих вакансий" + (f" ({len(errors)} ошибок)" if errors else "")
         return list(output.values())
-    grouped = await asyncio.gather(habr(),trudvsem(),return_exceptions=True)
+    async def geekjob():
+        collected={}
+        failures=[]
+        for page in (1,2):
+            try:
+                res=await client.get("https://geekjob.ru/vacancies",params={"page":page},
+                    headers={"User-Agent":"JobHunterAI/0.3 personal-job-search"},timeout=20)
+                res.raise_for_status()
+                jobs=parse_geekjob_html(res.text)
+                for j in jobs:
+                    if published_within(j["published"],max_age): collected[j["url"]]=j
+            except Exception as ex:
+                failures.append(str(ex)[:95])
+        if not collected and failures: raise RuntimeError("; ".join(failures[:2]))
+        statuses["GeekJob"]=str(len(collected))+" свежих вакансий" + (f" ({len(failures)} ошибок)" if failures else "")
+        return list(collected.values())
+    grouped = await asyncio.gather(habr(),trudvsem(),geekjob(),return_exceptions=True)
     jobs=[]
-    for key,out in zip(("Хабр Карьера","Работа России"),grouped):
+    for key,out in zip(("Хабр Карьера","Работа России","GeekJob"),grouped):
         if isinstance(out,Exception):
             statuses[key]="Ошибка: "+str(out)[:130]
         else: jobs.extend(out)
