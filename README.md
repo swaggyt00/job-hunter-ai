@@ -1,17 +1,31 @@
-# Job Hunter AI — personal Telegram bot
+# Job Hunter AI — персональный Telegram-бот
 
-Private-use long-polling Telegram bot for one user. Core commands: `/start`, `/scan`, `/top`, `/saved`, `/stats`, `/sources`, `/profile`, `/add`, `/cover ID`, `/analyze ID`, `/pause`, `/resume`. Buttons track applications, saves and skips. **The bot never automatically applies to jobs.**
+Работает на Railway, история и настройки хранятся в SQLite.
 
-## Sources and limitations
+## Команды
 
-Automated: Himalayas and Remotive public APIs; optional HeadHunter only with an authorized token; optional official public RSS/Atom feeds. Habr Career, getmatch and Dream Job support manual import: forward/paste a vacancy with its full description and URL, then reply `/add`. A bare URL is insufficient. Matching 0–100 is a heuristic, not a hiring probability. Optional `OPENAI_API_KEY` enables AI cover letters and analysis; without it the fallback is rule-based. Geographic eligibility must be confirmed independently.
+/scan — проверить вакансии; /top — лучшие; /sources — состояние интеграций;
+/period — кнопки периода публикации 24 часа / 3 / 7 / 14 / 30 дней;
+/since 2026-10-15 — от конкретной даты; /saved, /stats — история; 
+/cover ID — сопровод; /analyze ID — анализ; /add — импорт полного текста с URL;
+/pause, /resume — уведомления.
 
-## Railway deployment
+## Поисковые источники
 
-Connect **this repository** to a Railway service (Dockerfile root). Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_OWNER_ID` as protected Railway Variables; never commit them. Set `DB_PATH=/app/data/jobs.sqlite3` and attach a persistent Railway volume at `/app/data`. One service/replica, no public domain required: Telegram updates are handled by long polling. Optional: portfolio links and `OPENAI_API_KEY` in Railway Variables. Railway may charge for running containers and volumes.
+* Хабр Карьера: автоматический публичный RSS-поиск по запросам AI, LLM, LangGraph и др.
+* Работа России: официальный публичный API поиска вакансий.
+* GeekJob: HTML-каталог открытых вакансий (best-effort; статус проверяется в /sources).
+* Himalayas и Remotive: международные API, география найма требует проверки.
+* HeadHunter: автоматический API-поиск доступен только с разрешённым токеном HH_ACCESS_TOKEN, не обходя ограничения.
+* getmatch: публичный каталог не отдаёт карточки вакансий обычному HTTP-клиенту; автоматическая интеграция пока отсутствует.
+* Dream Job: нет подключённого публичного поискового API; возможен импорт через /add.
 
-Open the Telegram bot, press **Start** and send `/scan`. After setup check `Deploy Logs`. Scans run every 12 hours. Manual scans reuse the last result if less than 6 hours old, to respect job-source API rate limits.
+Показываются реальные даты публикации, если они доступны в источнике. Неподтверждённая удалёнка и страна найма отмечаются как предупреждение, а не автоматически скрывают карточку. Бот не отправляет отклики автоматически, а рейтинг 0–100 не является вероятностью трудоустройства.
 
-## Local
+## Хостинг
 
-Install Python 3.11+, run `pip install -r requirements.txt`, copy `.env.example` to `.env`, supply credentials and then use `python main.py`. For local environment files, load via your shell or `python-dotenv` if installed. Do not run local and cloud polling at the same time (Telegram getUpdates conflict).
+Railway — один long-polling сервис, постоянный том /app/data, переменные:
+TELEGRAM_BOT_TOKEN (секрет), TELEGRAM_OWNER_ID, DB_PATH=/app/data/jobs.sqlite3, SCAN_HOURS=12, MAX_AGE_DAYS=30.
+Портфолио и OpenAI API — необязательные переменные. Секреты не загружать в GitHub.
+
+Для деплоя Dockerfile запускает компиляцию и модульные тесты. При использовании /scan возможен кэш 6 часов (ограничения API), однако смена /period мгновенно меняет выборку базы. Источники и длительность хранения данных могут отличаться, поэтому полный охват российского рынка не гарантируется.
