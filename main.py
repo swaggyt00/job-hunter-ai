@@ -305,33 +305,86 @@ def secure(fn):
         if authorized(update): return await fn(update,ctx)
     return wrapped
 
+
+def date_preference():
+    since_value=flag("since","")
+    if since_value:
+        try: return {"since":datetime.strptime(since_value,"%Y-%m-%d").date()}
+        except ValueError: pass
+    return {"days":int(flag("period_days","7"))}
+
+def date_label():
+    p=date_preference()
+    if "since" in p: return "с "+p["since"].strftime("%d.%m.%Y")
+    return {1:"за сутки",3:"за 3 дня",7:"за неделю",14:"за 14 дней",30:"за месяц"}.get(p["days"],str(p["days"])+" дней")
+
+def period_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("24 часа",callback_data="period:1"),
+         InlineKeyboardButton("3 дня",callback_data="period:3")],
+        [InlineKeyboardButton("7 дней",callback_data="period:7"),
+         InlineKeyboardButton("14 дней",callback_data="period:14")],
+        [InlineKeyboardButton("30 дней",callback_data="period:30")]
+    ])
+
+def matching_jobs(limit=7,only_new=False,minimum=None):
+    minimum=MIN_SCORE if minimum is None else minimum
+    rows=selected("SELECT * FROM jobs WHERE rejected=0 AND score>=? AND status NOT IN ('skip','applied') ORDER BY score DESC,id DESC LIMIT 2500",(minimum,))
+    if only_new: rows=[r for r in rows if r["status"]=="new" and not r["notified"]]
+    return [r for r in rows if published_within(r["published"],**date_preference())][:limit]
+
+@secure
+async def period(update,ctx):
+    await update.message.reply_text("📅 Период публикации вакансий: "+date_label()+
+        "\nВыбери период или укажи дату вручную: /since 2026-10-15",reply_markup=period_keyboard())
+
+@secure
+async def since(update,ctx):
+    value=(ctx.args or [""])[0]
+    try:
+        picked=datetime.strptime(value,"%Y-%m-%d").date()
+        today=datetime.now(timezone.utc).date()
+        if picked>today or (today-picked).days>90: raise ValueError()
+    except ValueError:
+        await update.message.reply_text("Формат: /since 2026-10-15. Дата от 1 до 90 дней назад.")
+        return
+    setflag("since",value)
+    await update.message.reply_text("✅ Показываю вакансии с "+picked.strftime("%d.%m.%Y")+". Используй /top или /scan.")
+
 @secure
 async def start(update,ctx):
-    await update.message.reply_text("🤖 Job Hunter AI\n\n/scan — поиск новых вакансий\n/top — лучшие совпадения\n/saved — сохранённые\n/stats — отклики\n/sources — источники\n/profile — критерии\n/add — импорт вакансии (ответом на текст со ссылкой)\n/cover ID — сопровод\n/analyze ID — разбор\n/pause /resume — уведомления\n\nЯ не отправляю отклики автоматически.")
+    await update.message.reply_text("🤖 Job Hunter AI\n\n/scan — поиск новых вакансий\n/top — лучшие совпадения\n/period — период публикации\n/since ГГГГ-ММ-ДД — дата начала\n/saved — сохранённые\n/stats — отклики\n/sources — источники\n/profile — критерии\n/add — импорт вакансии (ответом на текст со ссылкой)\n/cover ID — сопровод\n/analyze ID — разбор\n/pause /resume — уведомления\n\nЯ не отправляю отклики автоматически.")
 
 @secure
 async def scan(update,ctx):
-    await update.message.reply_text("🔎 Проверяю вакансии…")
+    await update.message.reply_text("🔎 Проверяю вакансии ("+date_label()+")…")
     try: total,fresh,relevant,cached=await scan_data()
     except Exception:
         log.exception("Scan failed")
-        await update.message.reply_text("Ошибка поиска, проверь /sources")
+        await update.message.reply_text("Ошибка поиска. Подробности в /sources")
         return
-    await update.message.reply_text(("Использован предыдущий поиск (лимит 6 часов).\n" if cached else "")+
-                                    f"Получено: {total}\nНовых: {fresh}\nПодходящих новых: {relevant}")
-    rows=selected("SELECT * FROM jobs WHERE rejected=0 AND score>=? AND status='new' AND notified=0 ORDER BY score DESC LIMIT ?",(MIN_SCORE,NOTIFY_LIMIT))
-    if rows:
-        await show(ctx.bot,OWNER,rows)
-        for r in rows:
-            db.execute("UPDATE jobs SET notified=1 WHERE id=?", (r["id"],))
+    matches=matching_jobs(limit=2500)
+    fresh_rows=matching_jobs(limit=NOTIFY_LIMIT,only_new=True)
+    sources=db.execute("SELECT source,COUNT(*) AS n FROM jobs GROUP BY source ORDER BY n DESC").fetchall()
+    detail="\n".join(str(x["source"])+": "+str(x["n"]) for x in sources[:8])
+    await update.message.reply_text(("Использованы результаты последней проверки (лимит источников 6 часов).\n" if cached else "")+
+        f"📅 {date_label()}\nЗагружено: {total}\nНовых записей: {fresh}\nПодходящих за период: {len(matches)}\nНовых подходящих при проверке: {relevant}\n\nВ базе по источникам:\n{detail}\n\n/period — выбор даты\n/top — лучшие вакансии")
+    if fresh_rows:
+        await show(ctx.bot,OWNER,fresh_rows)
+        for r in fresh_rows:
+            db.execute("UPDATE jobs SET notified=1 WHERE id=?",(r["id"],))
         db.commit()
-    else: await update.message.reply_text("Новых подходящих нет. /top — лучшие ранее найденные.")
+    elif matches:
+        await update.message.reply_text("Новых уведомлений нет. Показываю лучшие уже найденные за период.")
+        await show(ctx.bot,OWNER,matches[:min(3,NOTIFY_LIMIT)])
+    else:
+        await update.message.reply_text("За этот период нет совпадений. Увеличь период в /period и посмотри /sources.")
 
 @secure
 async def top(update,ctx):
-    rows=selected("SELECT * FROM jobs WHERE rejected=0 AND score>=? AND status NOT IN ('skip','applied') ORDER BY score DESC, id DESC LIMIT 7",(MIN_SCORE,))
+    rows=matching_jobs(limit=7)
     if rows: await show(ctx.bot,OWNER,rows)
-    else: await update.message.reply_text("Пока нет подходящих вакансий. Начни с /scan.")
+    else: await update.message.reply_text("Пока нет подходящих "+date_label()+". Измени /period или проверь /sources.")
 
 @secure
 async def saved(update,ctx):
@@ -348,7 +401,7 @@ async def stats(update,ctx):
 @secure
 async def sources(update,ctx):
     await update.message.reply_text("🌍 Источники\n"+"\n".join(k+": "+v for k,v in source_status.items())+
-        "\n\nХабр/getmatch/Dream Job доступны через /add и официальные RSS, если заданы в Railway.")
+        "\n\nHH: официальный API-токен нужен. getmatch/Dream Job: импорт текста вакансий через /add.")
 
 @secure
 async def profile(update,ctx):
@@ -456,6 +509,12 @@ async def click(update,ctx):
     await q.answer()
     try: action,ident=q.data.split(":"); ident=int(ident)
     except (TypeError,ValueError): return
+    if action=="period":
+        if ident not in (1,3,7,14,30): return
+        setflag("period_days",str(ident))
+        setflag("since","")
+        await q.message.reply_text("✅ Период: "+date_label()+". /top или /scan")
+        return
     r=db.execute("SELECT * FROM jobs WHERE id=?",(ident,)).fetchone()
     if not r: await q.message.reply_text("Вакансия не найдена."); return
     if action in ("save","applied","skip"):
@@ -471,7 +530,7 @@ async def scheduled(ctx):
     if flag("paused","0")=="1": return
     try:
         await scan_data()
-        rows=selected("SELECT * FROM jobs WHERE rejected=0 AND score>=? AND status='new' AND notified=0 ORDER BY score DESC LIMIT ?",(MIN_SCORE,NOTIFY_LIMIT))
+        rows=matching_jobs(limit=NOTIFY_LIMIT,only_new=True)
         if rows:
             await show(ctx.bot,OWNER,rows)
             for r in rows: db.execute("UPDATE jobs SET notified=1 WHERE id=?",(r["id"],))
@@ -486,11 +545,11 @@ def main():
         raise RuntimeError("Set TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID in Railway Variables")
     app=Application.builder().token(TOKEN).post_init(init).build()
     for cmd,handler in (("start",start),("help",start),("scan",scan),("top",top),
-                        ("saved",saved),("stats",stats),("sources",sources),("profile",profile),
+                        ("saved",saved),("stats",stats),("sources",sources),("profile",profile),("period",period),("since",since),
                         ("add",add),("cover",command_cover),("analyze",command_analyze),
                         ("pause",pause),("resume",resume)):
         app.add_handler(CommandHandler(cmd,handler))
-    app.add_handler(CallbackQueryHandler(click,pattern=r"^(save|applied|skip|cover|analyze|detail):\d+$"))
+    app.add_handler(CallbackQueryHandler(click,pattern=r"^(save|applied|skip|cover|analyze|detail|period):\d+$"))
     log.info("Bot starting; owner=%s interval=%sh",OWNER,SCAN_HOURS)
     app.run_polling(drop_pending_updates=True)
 
