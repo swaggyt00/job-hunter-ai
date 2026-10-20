@@ -128,7 +128,7 @@ db.commit()
 lock = asyncio.Lock()
 last_scan = 0.0
 last_result = (0, 0, 0)
-source_status = {"Хабр Карьера": "Ожидание", "Работа России": "Ожидание", "getmatch": "Публичный каталог без списка вакансий; импорт /add", "Dream Job": "Нет открытого API; импорт /add", "Himalayas": "Ожидание", "Remotive": "Ожидание",
+source_status = {"GeekJob": "Ожидание", "Хабр Карьера": "Ожидание", "Работа России": "Ожидание", "getmatch": "Публичный каталог без списка вакансий; импорт /add", "Dream Job": "Нет открытого API; импорт /add", "Himalayas": "Ожидание", "Remotive": "Ожидание",
                  "HeadHunter": "Нет официального токена", "RSS": "Не подключены"}
 
 def flag(key, default=""):
