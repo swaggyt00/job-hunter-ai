@@ -266,6 +266,7 @@ async def scan_data():
         if last_scan and time.monotonic()-last_scan < 6*3600:
             return (*last_result,True)
         all_jobs=await gather_jobs()
+        log.info("Search source status: %s", source_status)
         fresh=match=0
         for job in all_jobs:
             _, created, s, rejected=insert(job)
