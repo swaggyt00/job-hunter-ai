@@ -13,6 +13,7 @@ from html import unescape
 from pathlib import Path
 from urllib.parse import urlparse
 from enhancements import fetch_russian_sources, parse_date, published_within
+from index_sources import fetch_index
 
 import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -110,6 +111,8 @@ def score_job(job):
         warnings.append("Высокие требования к опыту")
     if not job.get("salary"):
         warnings.append("Зарплата не указана")
+    if job["source"].endswith(" индекс"):
+        warnings.append("Найдено поисковым индексом: дату и актуальность проверь на сайте")
     if job["source"] in ("Himalayas", "Remotive"):
         warnings.append("Подтверди возможность найма из РФ")
     return min(100, max(0, s)), warnings, False, reasons
@@ -128,7 +131,7 @@ db.commit()
 lock = asyncio.Lock()
 last_scan = 0.0
 last_result = (0, 0, 0)
-source_status = {"GeekJob": "Ожидание", "Хабр Карьера": "Ожидание", "Работа России": "Ожидание", "getmatch": "Публичный каталог без списка вакансий; импорт /add", "Dream Job": "Нет открытого API; импорт /add", "Himalayas": "Ожидание", "Remotive": "Ожидание",
+source_status = {"HH индекс":"Ожидание", "Dream Job индекс":"Ожидание", "getmatch индекс":"Ожидание", "GeekJob": "Ожидание", "Хабр Карьера": "Ожидание", "Работа России": "Ожидание", "getmatch": "Публичный каталог без списка вакансий; импорт /add", "Dream Job": "Нет открытого API; импорт /add", "Himalayas": "Ожидание", "Remotive": "Ожидание",
                  "HeadHunter": "Нет официального токена", "RSS": "Не подключены"}
 
 def flag(key, default=""):
@@ -252,6 +255,9 @@ async def gather_jobs():
         russian, statuses = await fetch_russian_sources(client, max_age=DAYS)
         source_status.update(statuses)
         results.extend(russian)
+        indexed, indexed_status = await fetch_index(client)
+        source_status.update(indexed_status)
+        results.extend(indexed)
     return results
 
 async def scan_data():
@@ -357,7 +363,7 @@ async def since(update,ctx):
 
 @secure
 async def start(update,ctx):
-    await update.message.reply_text("🤖 Job Hunter AI\n\n/scan — поиск новых вакансий\n/top — лучшие совпадения\n/period — период публикации\n/since ГГГГ-ММ-ДД — дата начала\n/saved — сохранённые\n/stats — отклики\n/sources — источники\n/profile — критерии\n/add — импорт вакансии (ответом на текст со ссылкой)\n/cover ID — сопровод\n/analyze ID — разбор\n/pause /resume — уведомления\n\nЯ не отправляю отклики автоматически.")
+    await update.message.reply_text("🤖 Job Hunter AI\n\n/scan — поиск новых вакансий\n/top — лучшие совпадения\n/period — период публикации\n/since ГГГГ-ММ-ДД — дата начала\n/indexed — HH, Dream Job, getmatch из поискового индекса\n/saved — сохранённые\n/stats — отклики\n/sources — источники\n/profile — критерии\n/add — импорт вакансии (ответом на текст со ссылкой)\n/cover ID — сопровод\n/analyze ID — разбор\n/pause /resume — уведомления\n\nЯ не отправляю отклики автоматически.")
 
 @secure
 async def scan(update,ctx):
@@ -391,6 +397,15 @@ async def top(update,ctx):
     else: await update.message.reply_text("Пока нет подходящих "+date_label()+". Измени /period или проверь /sources.")
 
 @secure
+async def indexed(update,ctx):
+    rows=selected("SELECT * FROM jobs WHERE source LIKE ? AND rejected=0 AND status NOT IN ('skip','applied') ORDER BY score DESC,id DESC LIMIT 12",("% индекс",))
+    if not rows:
+        await update.message.reply_text("Индексных вакансий пока нет. Проверь /sources. Поисковая индексация может не отдавать результаты.")
+        return
+    await update.message.reply_text("🔍 Индексированные ссылки. Дата публикации не подтверждена; проверь актуальность на сайте перед откликом.")
+    await show(ctx.bot,OWNER,rows[:6])
+
+@secure
 async def saved(update,ctx):
     rows=selected("SELECT * FROM jobs WHERE status='saved' ORDER BY score DESC LIMIT 12")
     if rows: await show(ctx.bot,OWNER,rows)
@@ -405,7 +420,7 @@ async def stats(update,ctx):
 @secure
 async def sources(update,ctx):
     await update.message.reply_text("🌍 Источники\n"+"\n".join(k+": "+v for k,v in source_status.items())+
-        "\n\nHH: официальный API-токен нужен. getmatch/Dream Job: импорт текста вакансий через /add.")
+        "\n\n/indexed — индексные ссылки HH/Dream Job/getmatch с НЕИЗВЕСТНОЙ датой. Это не полноценный поиск сайтов. HH API без токена недоступен.")
 
 @secure
 async def profile(update,ctx):
@@ -554,7 +569,7 @@ def main():
         raise RuntimeError("Set TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID in Railway Variables")
     app=Application.builder().token(TOKEN).post_init(init).build()
     for cmd,handler in (("start",start),("help",start),("scan",scan),("top",top),
-                        ("saved",saved),("stats",stats),("sources",sources),("profile",profile),("period",period),("since",since),
+                        ("saved",saved),("stats",stats),("sources",sources),("profile",profile),("period",period),("since",since),("indexed",indexed),
                         ("add",add),("cover",command_cover),("analyze",command_analyze),
                         ("pause",pause),("resume",resume)):
         app.add_handler(CommandHandler(cmd,handler))
