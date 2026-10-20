@@ -1,6 +1,6 @@
 import unittest
 from datetime import datetime, timedelta, timezone
-from enhancements import parse_date, published_within, parse_habr_feed, parse_trudvsem
+from enhancements import parse_date, published_within, parse_habr_feed, parse_trudvsem, parse_geekjob_html
 
 class TestPublicationAndSources(unittest.TestCase):
     def test_rfc822_and_iso(self):
@@ -32,6 +32,16 @@ class TestPublicationAndSources(unittest.TestCase):
         self.assertTrue(jobs[0]["remote"])
         self.assertEqual(jobs[0]["company"],"Компания")
         self.assertTrue(jobs[0]["published"].startswith("2026-10-20T11:48"))
+
+    def test_geekjob(self):
+        markup='''<ul><li><a href="/vacancy/6abc123"><p>AI Video Creator</p>
+        <p>Media Studio</p><p>remote</p><time>20 октября</time></a></li></ul>'''
+        jobs=parse_geekjob_html(markup)
+        self.assertEqual(len(jobs),1)
+        self.assertTrue(jobs[0]["remote"])
+        self.assertEqual(jobs[0]["company"],"Media Studio")
+        self.assertEqual(jobs[0]["title"],"AI Video Creator")
+        self.assertTrue(jobs[0]["url"].startswith("https://geekjob.ru/vacancy/"))
 
     def test_trudvsem(self):
         doc={"results":{"vacancies":[{"vacancy":{"job-name":"AI-креатор","vac_url":"https://trudvsem.ru/vacancy/card/x/1",
