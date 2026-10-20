@@ -40,6 +40,9 @@ def parse_habr_feed(xml):
         matched = re.search(r"«(.+?)»", title)
         if matched: title = matched.group(1)
         desc=fields.get("description","")
+        full_title=title
+        salary_match=re.search(r"((?:от|до)\s+[\d\s]+(?:до\s+[\d\s]+)?₽)",full_title)
+        salary=salary_match.group(1).strip() if salary_match else ""
         url=fields.get("link","")
         if not url.startswith("https://career.habr.com/vacancies/"): continue
         from html import unescape
@@ -48,7 +51,7 @@ def parse_habr_feed(xml):
             source="Хабр Карьера", url=url, description=desc,
             published=(parse_date(fields.get("pubdate")) or datetime(1970,1,1,tzinfo=timezone.utc)).isoformat()
                   if fields.get("pubdate") else "",
-            salary="", remote=("можно удалённо" in desc.casefold() or "удален" in desc.casefold()),
+            salary=salary, remote=("можно удалённо" in desc.casefold() or "удален" in desc.casefold()),
             location="Россия"))
     return found
 
