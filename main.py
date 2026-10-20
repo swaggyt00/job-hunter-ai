@@ -195,7 +195,9 @@ async def gather_jobs():
 
         async def headhunter():
             token = os.getenv("HH_ACCESS_TOKEN", "").strip()
-            if not token: return []
+            if not token:
+                source_status["HeadHunter"]="Нет одобренного API-токена"
+                return []
             headers={"Authorization":"Bearer "+token, "HH-User-Agent":os.getenv("HH_USER_AGENT","JobHunterAI personal bot")}
             data={}
             for q in ("AI creator","AI video","LLM","AI automation","нейрокреатор"):
@@ -244,7 +246,8 @@ async def gather_jobs():
                 source_status[name]="Ошибка: "+str(out)[:120]
                 log.warning("Source %s: %s",name,out)
             else:
-                source_status[name]=str(len(out))+" вакансий"
+                if name != "HeadHunter" or out:
+                    source_status[name]=str(len(out))+" вакансий"
                 results.extend(j for j in out if j.get("title") and j.get("url"))
         russian, statuses = await fetch_russian_sources(client, max_age=DAYS)
         source_status.update(statuses)
@@ -283,9 +286,10 @@ def keyboard(r):
 def card(r):
     rs=json.loads(r["reasons"] or "[]")
     ws=json.loads(r["warnings"] or "[]")
+    date=parse_date(r["published"])
     return ("<b>"+html.escape(r["title"])+"</b>\n🏢 "+html.escape(r["company"])+
         "\n🎯 "+str(r["score"])+"/100 — рейтинг по правилам\n"+
-        "Источник: "+html.escape(r["source"])+
+        "Источник: "+html.escape(r["source"])+("\n📅 "+date.strftime("%d.%m.%Y") if date else "")+
         ("\n💰 "+html.escape(r["salary"]) if r["salary"] else "")+
         ("\n"+"\n".join("✅ "+html.escape(x) for x in rs) if rs else "")+
         ("\n"+"\n".join("⚠ "+html.escape(x) for x in ws) if ws else "")+
