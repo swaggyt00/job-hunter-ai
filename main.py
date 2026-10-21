@@ -17,9 +17,9 @@ from index_sources import fetch_index
 from browser_sources import dreamjob_fetch, hh_browser_fetch
 
 import httpx
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, BotCommand, Update
 from telegram.constants import ChatType, ParseMode
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters, ContextTypes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("jobhunter")
@@ -371,9 +371,23 @@ async def since(update,ctx):
     setflag("since",value)
     await update.message.reply_text("✅ Показываю вакансии с "+picked.strftime("%d.%m.%Y")+". Используй /top или /scan.")
 
+def main_buttons():
+    return ReplyKeyboardMarkup([["🔎 Поиск","⭐ Топ","📅 Дата"],
+                                ["📌 Сохранённые","🌐 Источники","🧭 HH"]],
+        resize_keyboard=True,is_persistent=True,
+        input_field_placeholder="Выбери действие")
+
+@secure
+async def button_text(update,ctx):
+    name=(update.message.text or "").strip()
+    options={"🔎 Поиск":scan,"⭐ Топ":top,"📅 Дата":period,
+             "📌 Сохранённые":saved,"🌐 Источники":sources,"🧭 HH":hh_status}
+    fn=options.get(name)
+    if fn: await fn(update,ctx)
+
 @secure
 async def start(update,ctx):
-    await update.message.reply_text("🤖 Job Hunter AI\n\n/scan — поиск новых вакансий\n/top — лучшие совпадения\n/period — период публикации\n/since ГГГГ-ММ-ДД — дата начала\n/hh_scan — поиск через браузер HH\n/dream_scan — поиск Dream Job\n/hh_status — статус HH\n/saved — сохранённые\n/stats — отклики\n/sources — источники\n/profile — критерии\n/add — импорт вакансии (ответом на текст со ссылкой)\n/cover ID — сопровод\n/analyze ID — разбор\n/pause /resume — уведомления\n\nЯ не отправляю отклики автоматически.")
+    await update.message.reply_text("🤖 Job Hunter AI\n\n/scan — поиск новых вакансий\n/top — лучшие совпадения\n/period — период публикации\n/since ГГГГ-ММ-ДД — дата начала\n/hh_scan — поиск через браузер HH\n/dream_scan — поиск Dream Job\n/hh_status — статус HH\n/saved — сохранённые\n/stats — отклики\n/sources — источники\n/profile — критерии\n/add — импорт вакансии (ответом на текст со ссылкой)\n/cover ID — сопровод\n/analyze ID — разбор\n/pause /resume — уведомления\n\nЯ не отправляю отклики автоматически.",reply_markup=main_buttons())
 
 @secure
 async def scan(update,ctx):
@@ -612,6 +626,7 @@ async def scheduled(ctx):
     except Exception: log.exception("Scheduled scan error (remember to press Start in Telegram)")
 
 async def init(app):
+    await app.bot.set_my_commands([BotCommand("start","Открыть меню"),BotCommand("scan","Поиск вакансий"),BotCommand("top","Лучшие за выбранный период"),BotCommand("period","Дата публикации"),BotCommand("hh_scan","Поиск на HH"),BotCommand("dream_scan","Поиск на Dream Job"),BotCommand("hh_status","Статус HH"),BotCommand("sources","Источники"),BotCommand("saved","Сохранённые")])
     totals=db.execute("SELECT source,COUNT(*) total,SUM(CASE WHEN rejected=0 THEN 1 ELSE 0 END) accepted, MAX(score) maxscore FROM jobs GROUP BY source").fetchall()
     log.info("Source diagnostics: %s",[(r["source"],r["total"],r["accepted"],r["maxscore"]) for r in totals])
     sample=db.execute("SELECT source,title,score,rejected,warnings FROM jobs WHERE source IN ('Хабр Карьера','Работа России','GeekJob') ORDER BY score DESC LIMIT 12").fetchall()
@@ -629,6 +644,7 @@ def main():
                         ("pause",pause),("resume",resume)):
         app.add_handler(CommandHandler(cmd,handler))
     app.add_handler(CallbackQueryHandler(click,pattern=r"^(save|applied|skip|cover|analyze|detail|period):\d+$"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r"^(🔎 Поиск|⭐ Топ|📅 Дата|📌 Сохранённые|🌐 Источники|🧭 HH)$"),button_text))
     log.info("Bot starting; owner=%s interval=%sh",OWNER,SCAN_HOURS)
     app.run_polling(drop_pending_updates=True)
 
