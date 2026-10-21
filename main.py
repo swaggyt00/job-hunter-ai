@@ -618,6 +618,15 @@ async def scheduled(ctx):
     if flag("paused","0")=="1": return
     try:
         await scan_data()
+        hh_status=source_status.get("HeadHunter (веб)","")
+        blocked=("Нужна ручная проверка" in hh_status or "Браузер HH не запустился" in hh_status)
+        if blocked and flag("hh_alert_sent","0")!="1":
+            await ctx.bot.send_message(OWNER,
+                "⚠️ Поиск HH остановлен.\n"+hh_status+
+                "\nПроверка не обходится автоматически. /hh_status покажет текущее состояние.")
+            setflag("hh_alert_sent","1")
+        if not blocked and flag("hh_alert_sent","0")=="1":
+            setflag("hh_alert_sent","0")
         rows=matching_jobs(limit=NOTIFY_LIMIT,only_new=True)
         if rows:
             await show(ctx.bot,OWNER,rows)
