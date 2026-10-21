@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from enhancements import fetch_russian_sources, parse_date, published_within
 from index_sources import fetch_index
+from browser_sources import dreamjob_fetch, hh_browser_fetch
 
 import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -47,7 +48,7 @@ BAD_ROLES = ("recruiter", "sales manager", "account executive", "hr manager",
              "разметчик данных", "рекрутер", "менеджер по продажам", "devops",
              "data scientist", "machine learning researcher")
 NO_OFFICE = ("office only", "onsite only", "on-site only", "только офис",
-             "строго офис", "гибридный формат", "hybrid only", "работа в офисе")
+             "строго офис", "гибридный формат", "hybrid only")
 NO_GIG = ("one-off", "one time gig", "per video", "per clip", "разовый проект",
           "оплата за ролик", "разовый заказ", "commission only", "только процент")
 NO_GEO = ("us only", "usa only", "only in the us", "eu only", "uk only",
@@ -131,7 +132,7 @@ db.commit()
 lock = asyncio.Lock()
 last_scan = 0.0
 last_result = (0, 0, 0)
-source_status = {"HH индекс":"Ожидание", "Dream Job индекс":"Ожидание", "getmatch индекс":"Ожидание", "GeekJob": "Ожидание", "Хабр Карьера": "Ожидание", "Работа России": "Ожидание", "getmatch": "Публичный каталог без списка вакансий; импорт /add", "Dream Job": "Нет открытого API; импорт /add", "Himalayas": "Ожидание", "Remotive": "Ожидание",
+source_status = {"HeadHunter (веб)":"Ожидание браузера", "Dream Job (веб)":"Ожидание проверки", "HH индекс":"Ожидание", "Dream Job индекс":"Ожидание", "getmatch индекс":"Ожидание", "GeekJob": "Ожидание", "Хабр Карьера": "Ожидание", "Работа России": "Ожидание", "getmatch": "Публичный каталог без списка вакансий; импорт /add", "Dream Job": "Нет открытого API; импорт /add", "Himalayas": "Ожидание", "Remotive": "Ожидание",
                  "HeadHunter": "Нет официального токена", "RSS": "Не подключены"}
 
 def flag(key, default=""):
@@ -255,9 +256,17 @@ async def gather_jobs():
         russian, statuses = await fetch_russian_sources(client, max_age=DAYS)
         source_status.update(statuses)
         results.extend(russian)
-        indexed, indexed_status = await fetch_index(client)
-        source_status.update(indexed_status)
-        results.extend(indexed)
+        # Read real job cards and their original publication dates, not search index dates.
+        dream, dream_status = await dreamjob_fetch(client, max_age=DAYS)
+        source_status["Dream Job (веб)"] = dream_status
+        results.extend(dream)
+        hh, hh_status = await hh_browser_fetch(max_age=DAYS)
+        source_status["HeadHunter (веб)"] = hh_status
+        results.extend(hh)
+        # Keep the legacy index disabled: it yielded no reliable results.
+        source_status["HH индекс"] = "Отключён в пользу браузера"
+        source_status["Dream Job индекс"] = "Отключён в пользу прямого поиска"
+        source_status["getmatch индекс"] = "Не используется"
     return results
 
 async def scan_data():
@@ -364,7 +373,7 @@ async def since(update,ctx):
 
 @secure
 async def start(update,ctx):
-    await update.message.reply_text("🤖 Job Hunter AI\n\n/scan — поиск новых вакансий\n/top — лучшие совпадения\n/period — период публикации\n/since ГГГГ-ММ-ДД — дата начала\n/indexed — HH, Dream Job, getmatch из поискового индекса\n/saved — сохранённые\n/stats — отклики\n/sources — источники\n/profile — критерии\n/add — импорт вакансии (ответом на текст со ссылкой)\n/cover ID — сопровод\n/analyze ID — разбор\n/pause /resume — уведомления\n\nЯ не отправляю отклики автоматически.")
+    await update.message.reply_text("🤖 Job Hunter AI\n\n/scan — поиск новых вакансий\n/top — лучшие совпадения\n/period — период публикации\n/since ГГГГ-ММ-ДД — дата начала\n/hh_scan — поиск через браузер HH\n/dream_scan — поиск Dream Job\n/hh_status — статус HH\n/saved — сохранённые\n/stats — отклики\n/sources — источники\n/profile — критерии\n/add — импорт вакансии (ответом на текст со ссылкой)\n/cover ID — сопровод\n/analyze ID — разбор\n/pause /resume — уведомления\n\nЯ не отправляю отклики автоматически.")
 
 @secure
 async def scan(update,ctx):
@@ -406,6 +415,51 @@ async def indexed(update,ctx):
     await update.message.reply_text("🔍 Индексированные ссылки. Дата публикации не подтверждена; проверь актуальность на сайте перед откликом.")
     await show(ctx.bot,OWNER,rows[:6])
 
+web_scan_state={}
+
+@secure
+async def hh_scan(update,ctx):
+    await platform_scan(update,ctx,"hh")
+
+@secure
+async def dream_scan(update,ctx):
+    await platform_scan(update,ctx,"dream")
+
+async def platform_scan(update,ctx,site):
+    name="HeadHunter (веб)" if site=="hh" else "Dream Job (веб)"
+    if web_scan_state.get(site,0) and time.monotonic()-web_scan_state[site]<3600:
+        await update.message.reply_text("Источник недавно проверен — лимит раз в час.\nСтатус: "+source_status.get(name,"нет данных")+"\n/top — карточки")
+        return
+    await update.message.reply_text("🔎 Проверяю "+name+"… Это может занять до двух минут.")
+    async with lock:
+        web_scan_state[site]=time.monotonic()
+        try:
+            if site=="hh": jobs,status=await hh_browser_fetch(max_age=DAYS)
+            else:
+                async with httpx.AsyncClient(timeout=26,follow_redirects=True) as client:
+                    jobs,status=await dreamjob_fetch(client,max_age=DAYS)
+            source_status[name]=status
+            new=matched=0
+            rows=[]
+            for job in jobs:
+                ident,created,score,rejected=insert(job)
+                if created:new+=1
+                if not rejected and score>=MIN_SCORE and published_within(job.get("published",""),**date_preference()):
+                    matched+=1
+                    if len(rows)<5:
+                        row=db.execute("SELECT * FROM jobs WHERE id=?",(ident,)).fetchone()
+                        if row:rows.append(row)
+            await update.message.reply_text(f"{name}\n{status}\nНовых карточек: {new}\nПодходящих за {date_label()}: {matched}")
+            if rows:await show(ctx.bot,OWNER,rows)
+        except Exception:
+            log.exception("Manual platform scan error")
+            await update.message.reply_text(name+": ошибка поиска. См. /sources.")
+
+@secure
+async def hh_status(update,ctx):
+    await update.message.reply_text("HH: "+source_status.get("HeadHunter (веб)","Нет данных")+
+        "\n/hh_scan — запуск проверки. Если HH запросит вход или капчу, бот остановится; автоматического обхода нет.")
+
 @secure
 async def saved(update,ctx):
     rows=selected("SELECT * FROM jobs WHERE status='saved' ORDER BY score DESC LIMIT 12")
@@ -421,7 +475,7 @@ async def stats(update,ctx):
 @secure
 async def sources(update,ctx):
     await update.message.reply_text("🌍 Источники\n"+"\n".join(k+": "+v for k,v in source_status.items())+
-        "\n\n/indexed — индексные ссылки HH/Dream Job/getmatch с НЕИЗВЕСТНОЙ датой. Это не полноценный поиск сайтов. HH API без токена недоступен.")
+        "\n\n/hh_scan — проверить HH вручную; /dream_scan — Dream Job. Если проверка доступа — поиск остановится, капча не обходится.")
 
 @secure
 async def profile(update,ctx):
@@ -570,7 +624,7 @@ def main():
         raise RuntimeError("Set TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID in Railway Variables")
     app=Application.builder().token(TOKEN).post_init(init).build()
     for cmd,handler in (("start",start),("help",start),("scan",scan),("top",top),
-                        ("saved",saved),("stats",stats),("sources",sources),("profile",profile),("period",period),("since",since),("indexed",indexed),
+                        ("saved",saved),("stats",stats),("sources",sources),("profile",profile),("period",period),("since",since),("indexed",indexed),("hh_scan",hh_scan),("hh_status",hh_status),("dream_scan",dream_scan),
                         ("add",add),("cover",command_cover),("analyze",command_analyze),
                         ("pause",pause),("resume",resume)):
         app.add_handler(CommandHandler(cmd,handler))
